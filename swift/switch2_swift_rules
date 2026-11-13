@@ -1,0 +1,50 @@
+#---------------------------------------------------------------------------------
+# Swift support for Switch 2 programs that use libounce.
+#
+# Include this file in place of $(DEVKITPRO)/libounce/switch2_rules:
+#
+#   include $(DEVKITPRO)/swift/switch2_swift_rules
+#
+# It includes switch2_rules, so the C and C++ rules apply without change, and
+# adds:
+# - SWIFTC and SWIFTFLAGS for the embedded Swift compiler.
+# - A %.o: %.swift rule.
+# - SWIFT_SHIM_OBJ, the object with the C runtime shims that newlib lacks.
+#
+# A Makefile that uses Swift adds the Swift objects to OFILES_SRC and
+# SWIFT_SHIM_OBJ to OFILES. See examples/swift-hello.
+#---------------------------------------------------------------------------------
+ifeq ($(strip $(DEVKITPRO)),)
+$(error "Please set DEVKITPRO in your environment. export DEVKITPRO=<path to>devkitPro")
+endif
+
+include $(DEVKITPRO)/libounce/switch2_rules
+
+SWIFT_HOME	?=	$(DEVKITPRO)/swift
+SWIFTC		?=	$(SWIFT_HOME)/toolchain/usr/bin/swiftc
+
+# The embedded Swift stdlib ships for aarch64-none-none-elf, not for the
+# aarch64-none-elf triple that devkitA64 uses. The two produce the same
+# objects; only the triple spelling differs.
+SWIFT_TARGET	:=	aarch64-none-none-elf
+
+SWIFTFLAGS	:=	-target $(SWIFT_TARGET) \
+			-enable-experimental-feature Embedded \
+			-wmo -parse-as-library -Osize -g
+
+SWIFT_SHIM_OBJ	:=	swift_shim.o
+
+#---------------------------------------------------------------------------------
+%.o: %.swift
+#---------------------------------------------------------------------------------
+	@echo $(notdir $<)
+	@$(SWIFTC) $(SWIFTFLAGS) -c $< -o $@
+
+#---------------------------------------------------------------------------------
+# A pattern rule, not an explicit one: an explicit target here would become the
+# default goal of every Makefile that includes this file.
+#---------------------------------------------------------------------------------
+%.o: $(SWIFT_HOME)/%.c
+#---------------------------------------------------------------------------------
+	@echo $(notdir $<)
+	@$(CC) -MMD -MP -MF $(DEPSDIR)/$*.d $(CPPFLAGS) $(CFLAGS) -c $< -o $@

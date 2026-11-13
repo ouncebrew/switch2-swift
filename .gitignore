@@ -1,0 +1,29 @@
+# Build output. Every example and the test suite build in place, and the
+# artifacts are tens of megabytes each.
+build/
+.build/
+tests/diag/
+*.o
+*.a
+*.elf
+*.nro
+*.nacp
+*.nso
+*.kip
+
+# The Swift toolchain and the builds of the standard library, libdispatch and
+# the Swift SDK. They are installed into $DEVKITPRO, not kept in the tree.
+toolchain/
+full-build/
+dispatch/build/
+swiftpm/sysroot/
+swiftpm/*.o
+
+# Nix build output.
+result
+result-*
+
+# Editor and shell tooling.
+.direnv/
+__pycache__/
+*.pyc

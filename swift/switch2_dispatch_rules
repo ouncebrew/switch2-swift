@@ -1,0 +1,45 @@
+#---------------------------------------------------------------------------------
+# libdispatch support for Switch 2 programs.
+#
+# Include this file in place of $(DEVKITPRO)/libounce/switch2_rules:
+#
+#   include $(DEVKITPRO)/swift/switch2_dispatch_rules
+#
+# It includes switch2_rules, so the C and C++ rules apply without change, and
+# adds:
+# - DISPATCH_CFLAGS, the flags libdispatch's headers need.
+# - DISPATCH_LIBS, the library and its C++ dependency.
+#
+# A Makefile that uses libdispatch adds DISPATCH_CFLAGS to CFLAGS and
+# DISPATCH_LIBS to LIBS. See examples/dispatch-hello.
+#
+# The library comes from build-dispatch.sh.
+#---------------------------------------------------------------------------------
+ifeq ($(strip $(DEVKITPRO)),)
+$(error "Please set DEVKITPRO in your environment. export DEVKITPRO=<path to>devkitPro")
+endif
+
+include $(DEVKITPRO)/libounce/switch2_rules
+
+DISPATCH_HOME	?=	$(DEVKITPRO)/swift/dispatch
+
+# libdispatch uses blocks, and devkitA64's gcc has no blocks support, so C
+# sources are compiled with the clang from the Swift toolchain.
+DISPATCH_CLANG	?=	$(DEVKITPRO)/swift/toolchain/usr/bin/clang
+CC		:=	$(DISPATCH_CLANG)
+
+# clang compiles the sources, but the link goes through devkitA64's gcc so that
+# switch.specs and libsysbase are picked up.
+LD		:=	$(DEVKITPRO)/devkitA64/bin/aarch64-none-elf-gcc
+
+# libdispatch uses blocks, so -fblocks is required. _GNU_SOURCE must not be
+# defined: it makes newlib declare encrypt(char *__block, ...), which collides
+# with the __block keyword.
+DISPATCH_CFLAGS	:=	-target aarch64-none-elf \
+			--sysroot=$(DEVKITPRO)/devkitA64/aarch64-none-elf \
+			-fblocks -U_GNU_SOURCE -D__unix__ \
+			-I$(DISPATCH_HOME)/include \
+			-I$(DISPATCH_HOME)/shim \
+			-include $(DISPATCH_HOME)/shim/dispatch_blocks_shim.h
+
+DISPATCH_LIBS	:=	-L$(DISPATCH_HOME)/lib -ldispatch -lstdc++
