@@ -54,52 +54,6 @@ let package = Package(
 Then build with `switch2-build.sh -c release`, as described in
 `docs/swiftpm.md`.
 
-## The mitm and hook framework
-
-`OunceMitm` wraps the man-in-the-middle IPC framework from the
-**libounce-mitm** patch set: request parsing, response building for both
-serializations, verbatim forwarding, the service-agnostic hook table, the
-fsp-srv specialization, and the override and loader paths.
-
-It is a separate product because that framework is not part of every libounce.
-A package that does not install the patch set still builds `Ounce`.
-
-```swift
-import Ounce
-import OunceMitm
-
-let hooks = MitmHookTable()
-try hooks.install(interface: FsHookInterface.root.rawValue,
-                  command: FsHookCommand.openSdCardFileSystem.rawValue) { ctx in
-    // Refuse SD card access.
-    _ = ctx.beginResponse(result: ResultCode(0xE01), payloadSize: 0, numHandles: 0)
-    return ResultCode(0)
-}
-
-let override = try MitmHookOverride()
-try override.start(service: "fsp-srv")
-try override.serve()
-```
-
-| | |
-|---|---|
-| `MitmService` | A session. Owns both handles and closes them on release. |
-| `MitmRequest` | A parsed request. Pointers are only valid until the next one. |
-| `MitmDomainTable` | Maps mitm object IDs to the real service's IDs. |
-| `MitmHookTable` | (interface, command) to Swift closure handlers. |
-| `MitmHookOverride` | The in-process override server. |
-| `MitmHookLoaderServer` | The loader-facing server. |
-| `FsHookInterface`, `FsHookCommand` | The fsp-srv interface and command IDs. |
-
-Handlers are Swift closures. The framework calls them through a C trampoline,
-so a handler can capture context. Return `MitmHookTable.forwardToSession` to
-have the request forwarded verbatim to the real service.
-
-**This product needs a libounce built with the patch set.** The headers alone
-are not enough: `libounce.a` must contain `mitmDomainTable*`, `mitmHook*`,
-`mitmHookOverride*` and `mitmHookLoaderServer*`. Without them the module
-compiles and the link fails.
-
 ## What is in it
 
 ### The whole of libnx

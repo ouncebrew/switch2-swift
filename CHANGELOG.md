@@ -10,6 +10,15 @@ Ported to `ounce-sdk 20261113` (libounce `db3f88a3`, OunceVK `791c34e`,
 OunceHEN `9451c44`), up from `20261112c`. The Swift half is split out of the
 console SDK repository into this one.
 
+### Removed: the `OunceMitm` package target
+
+`OunceMitm` and its C surface `COunceMitm` wrapped the man-in-the-middle IPC
+framework, which came from a libounce patch set rather than from libounce
+itself. The installed `libounce.a` never contained the `mitm*` symbols, so the
+product could compile but never link — it was unusable as shipped. The seven
+files, the two library products and the README section are gone, and `Ounce`
+is unaffected: it never referenced them.
+
 ### Fixed: thread-locals went through `tpidr_el0`
 
 The installed `libswift_Concurrency.a` was a stale build that predated
