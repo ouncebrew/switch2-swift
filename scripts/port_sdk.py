@@ -528,10 +528,19 @@ def main() -> int:
     )
     parser.add_argument("--apply", action="store_true", help="install the new SDK and its scripts")
     parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report only, which is the default; accepted so a command line can "
+        "say what it means explicitly",
+    )
+    parser.add_argument(
         "--skip-tls", action="store_true", help="do not check the built examples"
     )
     parser.add_argument("--jobs", type=int, default=0, help="parallel build jobs (informational)")
     args = parser.parse_args()
+
+    if args.apply and args.dry_run:
+        sys.exit("port_sdk.py: --apply and --dry-run contradict each other")
 
     if not args.archive.is_file():
         sys.exit(f"port_sdk.py: {args.archive}: no such file")
