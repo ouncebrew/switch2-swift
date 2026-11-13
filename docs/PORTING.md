@@ -30,6 +30,11 @@ make -C examples/swift-async
 python3 scripts/verify_tls_boundary.py --shim swift/swift_shim.c \
     examples/swift-full/swift-full.elf examples/swift-async/swift-async.elf \
     tests/switch2-swift-tests.elf
+
+# 5. Confirm no thread-local goes through tpidr_el0. This checks the
+#    libraries as well, because a stale one is how the rule rots.
+python3 scripts/verify_tls_boundary.py --archive \
+    $DEVKITPRO/swift/toolchain/usr/lib/swift/none/aarch64/*.a
 ```
 
 The script stops with a `FAIL` when something it can check is wrong. Everything
@@ -97,7 +102,63 @@ If a program's boundary disagrees with the others, chance are it links a
 different set of archives. Prefer making the layout uniform over shipping two
 values.
 
-### 2. The allocator interface
+### 2. The thread pointer: `tpidrro_el0`, never `tpidr_el0`
+
+This is not an SDK fact that moves; it is an invariant that quietly rots. It is
+in the porting checklist because the way it rots is *by a port* — a library
+gets rebuilt from a script whose flags changed, and a stale copy survives.
+
+The console has two thread-pointer registers:
+
+| Register | What it holds |
+|---|---|
+| `tpidrro_el0` | the program's thread-local block — readable at EL0, not writable |
+| `tpidr_el0` | the kernel's thread control block |
+
+The compiler emits `[tpidr_el0 + offset]` by default, so every invocation gets
+`-mtp=tpidrro_el0` (devkitA64's gcc spells the same thing `-mtp=soft`). An
+access through `tpidr_el0` reads memory that is not the program's, which
+usually means garbage or a fault, and it fails before `main` in a constructor,
+so the program exits to the launcher with no output at all.
+
+**Passing the flag is not sufficient.** It has to be on *every* compile,
+including the C++ standard library's, and a library built without it is
+indistinguishable from a correct one until a thread-local is touched — it
+links, it boots, and then it reads the wrong memory. The installed
+`libswift_Concurrency.a` shipped with 18 `tpidr_el0` accesses in `Actor.o` and
+10 in `TaskLocal.o` for exactly this reason: the archive predated the flag in
+`cc_flags`, even though the script had it. Those two files are the only ones
+affected, because they are the only sources that instantiate
+`SWIFT_THREAD_LOCAL_TYPE`:
+
+```cpp
+// stdlib/public/Concurrency/Actor.cpp
+class ActiveTask {
+  static SWIFT_THREAD_LOCAL_TYPE(Pointer<AsyncTask>, tls_key::concurrency_task) Value;
+};
+```
+
+so a plain `thread_local` in the standard library is not the risk; the
+runtime's macro is.
+
+Check it rather than trust it:
+
+```sh
+# Every archive member, by name, so you know what to rebuild.
+python3 scripts/verify_tls_boundary.py --archive \
+    $DEVKITPRO/swift/toolchain/usr/lib/swift/none/aarch64/*.a
+
+# Any linked program. Strip tpidrro_el0 first: it contains tpidr_el0 as a
+# substring, so a bare grep reports every correct program as broken.
+aarch64-none-elf-objdump -d foo.elf | sed 's/tpidrro_el0//g' | grep -c tpidr_el0
+```
+
+`build-stdlib.sh` refuses to install a library that fails this, and
+`port_sdk.py` runs the archive check on every port. When one fails, rebuild
+with `sh $DEVKITPRO/swift/full/build-stdlib.sh libs` — a few minutes, and it
+skips the slow Swift module, which contains no thread-locals of this kind.
+
+### 3. The allocator interface
 
 libounce replaces `malloc` and friends with mimalloc. The Swift toolchain has
 to cooperate in three places, and each fails differently:
@@ -125,7 +186,7 @@ to cooperate in three places, and each fails differently:
 If `port_sdk.py` reports that libounce no longer defines the allocator entry
 points, or that `malloc.o`/`heap_pages.o` are missing, check all three.
 
-### 3. The build rules' shape
+### 4. The build rules' shape
 
 `switch2_swift_rules`, `switch2_swift_full_rules` and `switch2_dispatch_rules`
 include `$(DEVKITPRO)/libounce/switch2_rules` and rely on what it sets:
@@ -139,7 +200,7 @@ The rules were reshaped in the `20261110` release and again in `20261113`; the
 current shape is the one the Makefiles use, with `LIBDIRS := $(PORTLIBS)
 $(LIBNX)`. A Makefile that spelled out `$(PORTLIBS_PATH)/switch2` would break.
 
-### 4. Headers the port includes
+### 5. Headers the port includes
 
 Mostly stable, but two matter:
 
@@ -153,7 +214,7 @@ Mostly stable, but two matter:
 wrapper imports. It gained `extern "C"` in `20261113`, which is a fix rather
 than a break, but it is worth noticing when it changes.
 
-### 5. The linker script and specs
+### 6. The linker script and specs
 
 `switch.ld` and `switch.specs` were byte-identical across both releases seen so
 far, and are worth checking byte for byte when they are not, because
@@ -181,15 +242,21 @@ hooks), so it is rebuilt.
 
 1. `port_sdk.py` compares and reports.
 2. Install the archive and the scripts.
-3. Rebuild libdispatch and the SwiftPM bundle. Both depend on libounce.
-4. Rebuild the examples, the test suite and the diag probes.
-5. Re-derive `SWIFT_TLS_START` and update `swift_shim.c` if it moved.
-6. Rebuild everything that links the shim: that is every Swift program.
-7. Update `HANDOFF.md`'s compatibility table and `CHANGELOG.md`.
-8. `scripts/release.py` to commit and push.
+3. Rebuild the standard library's C++ libraries, libdispatch and the SwiftPM
+   bundle. All three depend on libounce.
+4. Confirm the archives use `tpidrro_el0` and not `tpidr_el0`. A rebuild that
+   silently reused a stale object is the failure this catches.
+5. Rebuild the examples, the test suite and the diag probes.
+6. Re-derive `SWIFT_TLS_START` and update `swift_shim.c` if it moved.
+7. Rebuild everything that links the shim: that is every Swift program.
+8. Update `HANDOFF.md`'s compatibility table and `CHANGELOG.md`.
+9. `scripts/release.py` to commit and push.
 
-Step 6 is not optional. The shim is a plain object in every Swift link, so a
-change to it invalidates every previously built binary.
+Steps 4 and 7 are not optional. The shim is a plain object in every Swift
+link, so a change to it invalidates every previously built binary; and a
+library built without `-mtp=tpidrro_el0` links and boots and then reads the
+wrong memory, so the flag being right in the script proves nothing about what
+is installed.
 
 ## When a program crashes before `main`
 

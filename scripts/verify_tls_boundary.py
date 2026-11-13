@@ -13,6 +13,15 @@ thread-local. On `ounce-sdk 20261113`, mimalloc arrived and pushed it from
 0x410 to 0x430. This script re-derives it from a linked program, so a port to a
 new SDK release can be checked rather than guessed at.
 
+It also enforces the register rule: **no `tpidr_el0` anywhere in the program**.
+On the console `tpidr_el0` holds the kernel's thread control block, so a
+`thread_local` compiled against it reads memory that is not the program's. The
+compiler must be told `-mtp=tpidrro_el0`, and every C++ library with a
+thread-local in it must be rebuilt with that flag; a library built without it
+links and runs until the first thread-local access, then reads garbage or
+faults. `check_thread_pointer` fails on any occurrence, because a single one
+is enough to break a program and there is no benign case.
+
 How it decides
 --------------
 The ELF's TLS symbols are sorted by offset. libnx and mimalloc own the low
@@ -32,9 +41,11 @@ Usage
     python3 scripts/verify_tls_boundary.py BINARY [BINARY...]
     python3 scripts/verify_tls_boundary.py --shim PATH BINARY
     python3 scripts/verify_tls_boundary.py --write-swift-shim PATH BINARY
+    python3 scripts/verify_tls_boundary.py --archive LIB.a [LIB.a...]
 
-Exit status is 0 when every binary agrees on a boundary that matches the shim,
-1 when they disagree or the shim is out of date, 2 on a usage or parse error.
+Exit status is 0 when every binary agrees on a boundary that matches the shim
+and no input uses `tpidr_el0`, 1 when either check fails, 2 on a usage or
+parse error.
 """
 
 from __future__ import annotations
@@ -262,7 +273,91 @@ def write_shim_value(shim: Path, value: int) -> bool:
     return True
 
 
+def check_thread_pointer(path: Path, objdump: str) -> tuple[bool, list[str]]:
+    """Return whether PATH avoids `tpidr_el0`, and where it does not.
+
+    The console has two thread-pointer registers. `tpidrro_el0` is read-only
+    from EL0 and points at the block the program's thread-locals live in;
+    `tpidr_el0` holds the kernel's thread control block. The compiler emits
+    `[tpidr_el0 + offset]` by default, which is why every toolchain here passes
+    `-mtp=tpidrro_el0`.
+
+    One occurrence is enough to break a program, and there is no benign case: a
+    library built without the flag links cleanly and reads the wrong memory the
+    first time one of its thread-locals is touched. What makes this worth
+    checking is that a *stale* library is the normal way it appears — the build
+    succeeds because the flag is right in the script, while the installed
+    archive predates the flag.
+
+    For an archive the member names are reported, because that is what has to be
+    rebuilt.
+    """
+    result = subprocess.run(
+        [objdump, "-d", str(path)], capture_output=True, text=True, check=False
+    )
+    if result.returncode != 0:
+        return False, [
+            f"objdump failed: {result.stderr.strip() or 'no output'}"
+        ]
+
+    # `tpidrro_el0` contains `tpidr_el0` as a prefix, so the two are told apart
+    # before counting: drop every `tpidrro_el0` mention, then look for what is
+    # left. A substring test that forgot this would report every correct
+    # program as broken.
+    offenders: list[str] = []
+    current_member = None
+    for line in result.stdout.splitlines():
+        member = re.match(r"^(\S+\.o):\s+file format", line)
+        if member:
+            current_member = member.group(1)
+
+        if "tpidr_el0" not in line.replace("tpidrro_el0", ""):
+            continue
+        label = current_member or "<program>"
+        if label not in offenders:
+            offenders.append(label)
+
+    return not offenders, offenders
+
+
+def check_archives(args: argparse.Namespace) -> int:
+    """Check static libraries for `tpidr_el0` and nothing else.
+
+    An archive has no linked TLS layout, so the boundary cannot be measured
+    from it. This mode exists so the register rule can be checked against the
+    libraries themselves, which is where a stale build shows up first and with
+    the most detail.
+    """
+    objdump = find_tool("aarch64-none-elf-objdump", "llvm-objdump", "objdump")
+    failed = False
+
+    for path in args.binaries:
+        if not path.is_file():
+            sys.exit(f"verify_tls_boundary.py: {path}: no such file")
+        clean, offenders = check_thread_pointer(path, objdump)
+        if clean:
+            print(f"{path}: no tpidr_el0")
+        else:
+            failed = True
+            print(f"{path}: uses tpidr_el0 in {len(offenders)} object(s):")
+            for offender in offenders[:20]:
+                print(f"  {offender}")
+            if len(offenders) > 20:
+                print(f"  ... and {len(offenders) - 20} more")
+
+    if failed:
+        print(
+            "\nRebuild the affected library with -mtp=tpidrro_el0. For the "
+            "Swift standard library that is:\n"
+            "  sh $DEVKITPRO/swift/full/build-stdlib.sh libs",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
 def describe(symbols: list[TlsSymbol], boundary: int) -> str:
+
     """Return a short table of the low thread-locals, for the report."""
     lines = []
     for symbol in symbols:
@@ -281,7 +376,18 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("binaries", nargs="+", type=Path, help="linked .elf files")
+    parser.add_argument(
+        "binaries",
+        nargs="+",
+        type=Path,
+        help="linked .elf files, or archives with --archive",
+    )
+    parser.add_argument(
+        "--archive",
+        action="store_true",
+        help="treat the arguments as static libraries: check only the thread "
+        "pointer, since an archive has no linked TLS layout to measure",
+    )
     parser.add_argument(
         "--shim",
         type=Path,
@@ -298,11 +404,17 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    objdump = find_tool("aarch64-none-elf-objdump", "llvm-objdump", "objdump")
+
+    if args.archive:
+        return check_archives(args)
+
     nm = find_tool("aarch64-none-elf-nm", "llvm-nm", "nm")
     readelf = find_tool("aarch64-none-elf-readelf", "llvm-readelf", "readelf")
 
     measured: dict[int, list[Path]] = {}
     details: dict[int, str] = {}
+    pointer_failures: list[tuple[Path, list[str]]] = []
     for binary in args.binaries:
         if not binary.is_file():
             sys.exit(f"verify_tls_boundary.py: {binary}: no such file")
@@ -317,6 +429,10 @@ def main() -> int:
                 f"{boundary:#x} is past the end of the TLS block "
                 f"({tdata + tbss:#x})."
             )
+
+        clean, offenders = check_thread_pointer(binary, objdump)
+        if not clean:
+            pointer_failures.append((binary, offenders))
 
         measured.setdefault(boundary, []).append(binary)
         details[boundary] = describe(symbols, boundary)
@@ -379,6 +495,31 @@ def main() -> int:
             return 1
         print(f"{args.shim}: {SHIM_DEFINE}=0x{current:X} matches")
 
+    if pointer_failures:
+        print(
+            "\nverify_tls_boundary.py: thread-locals are accessed through "
+            "tpidr_el0, which is the kernel's thread control block on the "
+            "console, not the program's:",
+            file=sys.stderr,
+        )
+        for binary, offenders in pointer_failures:
+            print(f"  {binary}:", file=sys.stderr)
+            for offender in offenders[:10]:
+                print(f"      {offender}", file=sys.stderr)
+            if len(offenders) > 10:
+                print(f"      ... and {len(offenders) - 10} more", file=sys.stderr)
+        print(
+            "\nEvery compiler invocation needs -mtp=tpidrro_el0. A *stale* "
+            "library is the usual cause: the flag is right in the build script "
+            "but the installed archive predates it. Rebuild it:\n"
+            "  sh $DEVKITPRO/swift/full/build-stdlib.sh libs\n"
+            "  sh $DEVKITPRO/swift/dispatch/build-dispatch.sh\n"
+            "then rebuild every program that links them.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print("No tpidr_el0: every thread-local goes through tpidrro_el0")
     return 0
 
 

@@ -10,6 +10,27 @@ Ported to `ounce-sdk 20261113` (libounce `db3f88a3`, OunceVK `791c34e`,
 OunceHEN `9451c44`), up from `20261112c`. The Swift half is split out of the
 console SDK repository into this one.
 
+### Fixed: thread-locals went through `tpidr_el0`
+
+The installed `libswift_Concurrency.a` was a stale build that predated
+`-mtp=tpidrro_el0` in `cc_flags`: `Actor.o` had 18 accesses through
+`tpidr_el0` and `TaskLocal.o` had 10. On the console `tpidr_el0` is the
+kernel's thread control block, so every one of those read memory that was not
+the program's. It built, linked and booted, and would have failed the first
+time the concurrency runtime touched its own thread-locals.
+
+Rebuilt the C++ libraries; every one of the eight archives now has 0
+`tpidr_el0`, with 28 `tpidrro_el0` accesses between them, and every example,
+the test suite and the SwiftPM package links the same way.
+
+The rule is now enforced instead of documented, because a library built
+without the flag is indistinguishable from a correct one until it runs:
+
+- `scripts/verify_tls_boundary.py --archive` fails on any archive member that
+  uses `tpidr_el0`, naming the object, and every linked binary is checked too.
+- `build-stdlib.sh` refuses to install a library that fails the check.
+- `port_sdk.py` runs the archive check as part of every port.
+
 ### Fixed for the new console SDK
 
 - **`SWIFT_TLS_START` moved from `0x410` to `0x430`.** libounce began linking

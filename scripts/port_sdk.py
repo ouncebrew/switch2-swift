@@ -417,12 +417,57 @@ def check_cmake_toolchain(report: Report, new_root: Path) -> None:
 # --------------------------------------------------------------------------
 # Build verification
 # --------------------------------------------------------------------------
+def check_thread_pointer_rule(report: Report, devkitpro: Path) -> None:
+    """Every Swift archive must access thread-locals through tpidrro_el0.
+
+    A library built without -mtp=tpidrro_el0 links and builds anyway and reads
+    the kernel's thread control block on the console, so this cannot be left to
+    the link succeeding. The libraries are checked rather than the programs,
+    because that is where a stale build hides: the flag can be correct in the
+    build script while the installed archive predates it.
+    """
+    swiftlib = devkitpro / "swift" / "toolchain" / "usr" / "lib" / "swift" / "none" / "aarch64"
+    if not swiftlib.is_dir():
+        report.add(
+            "info",
+            "Skipping the thread-pointer check: the standard library is not built",
+            action="Run build-stdlib.sh, then re-run this check.",
+        )
+        return
+
+    archives = sorted(swiftlib.glob("*.a"))
+    if not archives:
+        report.add("info", "No Swift archives to check in " + str(swiftlib))
+        return
+
+    result = run(
+        [sys.executable, str(VERIFY_TLS), "--archive", *map(str, archives)]
+    )
+    output = (result.stdout + result.stderr).strip()
+    if result.returncode == 0:
+        report.add(
+            "ok",
+            f"{len(archives)} Swift archive(s) use tpidrro_el0 and not tpidr_el0",
+        )
+    else:
+        report.add(
+            "fail",
+            "A Swift archive accesses thread-locals through tpidr_el0",
+            output,
+            "Rebuild the standard library with -mtp=tpidrro_el0:\n"
+            "  sh $DEVKITPRO/swift/full/build-stdlib.sh libs\n"
+            "then rebuild every program. A stale archive is the usual cause.",
+        )
+
+
 def rebuild_and_verify(report: Report, devkitpro: Path, jobs: int) -> None:
     """Rebuild the Swift artifacts and check the TLS boundary."""
     verify = run([sys.executable, str(VERIFY_TLS), "--help"])
     if verify.returncode != 0:
         report.add("warn", "verify_tls_boundary.py is not runnable", verify.stderr.strip())
         return
+
+    check_thread_pointer_rule(report, devkitpro)
 
     examples = [
         REPO_ROOT / "examples" / name / f"{name}.elf"

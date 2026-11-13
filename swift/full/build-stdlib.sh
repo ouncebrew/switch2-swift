@@ -546,14 +546,50 @@ PYEOF
 #---------------------------------------------------------------------------------
 # Install
 #---------------------------------------------------------------------------------
+# True if LIBRARY contains no `tpidr_el0` access. A thread-local compiled
+# against that register reads the kernel's thread control block instead of the
+# program's thread-locals, and the flag that prevents it (-mtp=tpidrro_el0) is
+# easy to lose when a library is built by an older copy of this script. The
+# program links and builds either way, so this has to be checked explicitly.
+has_wrong_thread_pointer() {
+    "$DEVKITA64/bin/aarch64-none-elf-objdump" -d "$1" 2>/dev/null |
+        sed 's/tpidrro_el0//g' |
+        grep -q 'tpidr_el0'
+}
+
+check_thread_pointer() {
+    for library in "$@"; do
+        if has_wrong_thread_pointer "$library"; then
+            cat >&2 <<EOF
+build-stdlib.sh: $(basename "$library") accesses thread-locals through
+tpidr_el0, which on the console is the kernel's thread control block.
+
+Every compiler invocation must pass -mtp=tpidrro_el0. Check cc_flags and
+swift_cc_flags in this script, then remove the stale objects and rebuild:
+  rm -rf "$OBJ"
+  sh build-stdlib.sh
+EOF
+            exit 1
+        fi
+    done
+}
+
 install_libraries() {
     echo "Installing into $INSTALL"
     mkdir -p "$INSTALL"
     cp "$BUILD/Swift.swiftmodule" "$INSTALL/"
     cp "$BUILD/_Concurrency.swiftmodule" "$INSTALL/"
-    for library in libswiftCore libswiftRuntime libswiftDemangle \
-        libswiftLLVMSupport libswiftStdlibStubs libswiftThreading \
-        libswift_Concurrency libswift_Concurrency_swift; do
+    libraries="libswiftCore libswiftRuntime libswiftDemangle \
+libswiftLLVMSupport libswiftStdlibStubs libswiftThreading \
+libswift_Concurrency libswift_Concurrency_swift"
+
+    # Refuse to install a library that would read the wrong thread pointer.
+    # shellcheck disable=SC2086
+    check_thread_pointer $(for library in $libraries; do
+        echo "$BUILD/$library.a"
+    done)
+
+    for library in $libraries; do
         cp "$BUILD/$library.a" "$INSTALL/"
     done
 }

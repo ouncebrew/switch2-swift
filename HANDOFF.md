@@ -389,9 +389,30 @@ if you change anything.
   kernel's thread control block instead. Mixing the two makes every TLS access
   read the wrong memory, and it fails *before `main`*, in a library constructor,
   so the program exits to the launcher with no output at all. clang rejects
-  `-mtp=soft`, but `-mtp=tpidrro_el0` produces the same base register. Check any
-  binary with
+  `-mtp=soft`, but `-mtp=tpidrro_el0` produces the same base register.
+
+  **Nothing may use `tpidr_el0`, anywhere, ever.** Check with
   `aarch64-none-elf-objdump -d foo.elf | grep -c tpidr_el0` — it must be 0.
+  Beware the substring: `tpidrro_el0` contains `tpidr_el0`, so grep on its own
+  is misleading; strip `tpidrro_el0` first.
+
+  Passing the flag is not enough on its own, which is the trap this cost the
+  most to find. The flag has to be on **every** compile, including the C++
+  standard library's, and a library built without it is indistinguishable from
+  a correct one until a thread-local is touched: it links, it boots, and it
+  reads the wrong memory. The installed `libswift_Concurrency.a` shipped with
+  18 `tpidr_el0` accesses in `Actor.o` and 10 in `TaskLocal.o` because the
+  archive predated the flag in `cc_flags`; the current script compiles the same
+  file to 0 `tpidr_el0` and 16 `tpidrro_el0`. Only `Actor.o` and `TaskLocal.o`
+  are affected, because they are the only sources that instantiate the runtime's
+  `SWIFT_THREAD_LOCAL_TYPE` macro.
+
+  So the rule is checked rather than trusted:
+  `scripts/verify_tls_boundary.py --archive` fails on any archive member that
+  uses `tpidr_el0`, `build-stdlib.sh` refuses to install a library that does,
+  and `port_sdk.py` runs the archive check as part of every port. Rebuild with
+  `sh $DEVKITPRO/swift/full/build-stdlib.sh libs`, which is a few minutes and
+  skips the slow Swift module.
 - **`build-stdlib.sh` needs `CXX` set to clang 21.** The toolchain's own clang 17
   cannot parse devkitA64's libstdc++ 16 headers and fails on `SwiftObject.mm`
   with an incomplete-type error in `stl_iterator.h`. The script warns about this
