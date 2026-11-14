@@ -22,13 +22,16 @@ python3 scripts/port_sdk.py --archive /path/to/ounce-sdk.tar.xz --apply
 # 3. Rebuild the Swift side.
 sh $DEVKITPRO/swift/install-swift.sh --force   # only if Swift itself changed
 sh $DEVKITPRO/swift/full/build-stdlib.sh
+sh $DEVKITPRO/swift/foundation/build-foundation.sh
 sh $DEVKITPRO/swift/dispatch/build-dispatch.sh
 sh $DEVKITPRO/swift/swiftpm/install-swift-sdk.sh --force
 
 # 4. Rebuild the programs and re-derive the boundary.
 make -C examples/swift-async
+make -C examples/foundation-hello
 python3 scripts/verify_tls_boundary.py --shim swift/swift_shim.c \
     examples/swift-full/swift-full.elf examples/swift-async/swift-async.elf \
+    examples/foundation-hello/foundation-hello.elf \
     tests/switch2-swift-tests.elf
 
 # 5. Confirm no thread-local goes through tpidr_el0. This checks the

@@ -8,6 +8,8 @@ A Swift toolchain for Switch 2 homebrew, on top of the
 - **Embedded Swift**, for programs that need no standard library at all.
 - **The full Swift standard library**, built for `aarch64-none-none-elf`
   against devkitA64's newlib: `String`, arrays, reflection, Unicode.
+- **FoundationEssentials**, the ICU-free part of Foundation: `Data`, `Date`,
+  `URL`, JSON, `Codable`, `FileManager` and `ProcessInfo`.
 - **Swift concurrency** — `async`/`await`, actors, task groups — single
   threaded, on the console's cooperatively scheduled global executor.
 - **libdispatch**, built on shims for the pieces the console lacks: futex,
@@ -16,8 +18,9 @@ A Swift toolchain for Switch 2 homebrew, on top of the
 - **`Ounce`**, a Swift wrapper over libounce and OunceHEN: console, applet
   lifecycle, controller input, filesystem mounts and HEN sessions.
 
-Not ported: Foundation, backtracing, dispatch sources that watch file
-descriptors, dispatch I/O.
+Not ported: `FoundationInternationalization` (ICU), `FoundationNetworking`,
+`FoundationXML`, backtracing, dispatch sources that watch file descriptors,
+dispatch I/O.
 
 This repository is the Swift half of the Switch 2 SDK. The console SDK itself —
 libounce, OunceVK, OunceHEN — ships separately; `install.sh` checks for it and
@@ -32,6 +35,8 @@ The console SDK must be installed first, into `$DEVKITPRO` (usually
 sh install.sh                      # copies the rules and scripts
 sh $DEVKITPRO/swift/install-swift.sh
 sh $DEVKITPRO/swift/full/build-stdlib.sh
+sh $DEVKITPRO/swift/foundation/fetch-foundation.sh
+sh $DEVKITPRO/swift/foundation/build-foundation.sh
 sh $DEVKITPRO/swift/dispatch/build-dispatch.sh
 sh $DEVKITPRO/swift/swiftpm/install-swift-sdk.sh
 ```
@@ -84,7 +89,34 @@ LIBS	:=	-lnx $(DISPATCH_LIBS)                # libdispatch
 ```
 
 `examples/` has one program for each: `swift-hello` (embedded), `swift-full`
-(full library), `swift-async` (concurrency) and `dispatch-hello` (libdispatch).
+(full library), `swift-async` (concurrency), `dispatch-hello` (libdispatch) and
+`foundation-hello` (FoundationEssentials).
+
+## FoundationEssentials
+
+`swift/foundation/` builds the part of Foundation that needs no ICU: `Data`,
+`Date`, `URL`, `JSONDecoder`, `Codable`, `FileManager` and `ProcessInfo`. The
+build fetches upstream swift-foundation, patches its POSIX assumptions behind
+`__SWITCH__` at build time and installs `libswiftFoundationEssentials.a`, its
+Swift modules and the C shim module maps. The upstream sources stay unmodified.
+
+```sh
+sh $DEVKITPRO/swift/foundation/fetch-foundation.sh
+sh $DEVKITPRO/swift/foundation/build-foundation.sh
+```
+
+Import `FoundationEssentials`, not `Foundation`: the umbrella module pulls in
+Internationalization, Networking and XML, which this port does not include. The
+full-library rules add the shim module maps and `SWIFT_FOUNDATION_LIBS` once the
+build has installed them, so a Makefile only needs
+`LIBS := -lnx $(SWIFT_FOUNDATION_LIBS) $(SWIFT_FULL_LIBS)`. SwiftPM packages
+get the same flags from the generated SDK bundle, so `import
+FoundationEssentials` is enough there.
+
+Not in this port: regular expressions (the toolchain has no
+`_StringProcessing`), time zone data beyond `sdmc:/switch/zoneinfo`, extended
+attributes and `chown` (the SD filesystem has neither), and user or group
+accounts (the console has none).
 
 ## Build a SwiftPM package
 

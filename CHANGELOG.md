@@ -4,6 +4,23 @@ The SDK version each release was built and verified against is in
 `SDK_VERSION`. The console SDK ships separately; see `docs/PORTING.md` for what
 has to be re-derived when it moves.
 
+## Unreleased — FoundationEssentials
+
+Added `swift/foundation/`, which builds the ICU-free part of Foundation
+(`FoundationEssentials`) against the full standard library: `Data`, `Date`,
+`URL`, JSON, `Codable`, `FileManager` and `ProcessInfo`. Upstream sources stay
+unmodified; `build-foundation.sh` applies the POSIX patches behind `__SWITCH__`
+and installs the library, its Swift modules and the C shim module maps.
+`switch2_swift_full_rules` adds the module maps and `SWIFT_FOUNDATION_LIBS` when
+the build is installed, and `examples/foundation-hello` shows a program using
+`FoundationEssentials`.
+
+Known limits: no `FoundationInternationalization` (ICU), `FoundationNetworking`
+or `FoundationXML`; no `_StringProcessing`, so regular-expression options fall
+back to literal matching; extended attributes and `chown` report `ENOTSUP`;
+there are no user or group accounts; time zone data is read from
+`sdmc:/switch/zoneinfo`. Built and linked, not run on hardware.
+
 ## 20261113 — first release in this repository
 
 Ported to `ounce-sdk 20261113` (libounce `db3f88a3`, OunceVK `791c34e`,

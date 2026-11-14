@@ -217,8 +217,14 @@ set -eu
 
 DEVKITPRO="@DEVKITPRO@"
 ALLOCATOR_OBJECTS="@ALLOCATOR_OBJECTS@"
-arguments=""
-
+# Arguments are collected as positional parameters rather than in a string.
+# Object paths can contain spaces -- swift-collections has files named
+# "TreeSet+SetAlgebra subtracting.swift", and swift-foundation has
+# "Collection Stdlib Defaults.swift" -- and a string would split those into
+# separate arguments, so the linker is handed a truncated path and reports
+# "cannot find .../UnsafeRawPointer: No such file or directory". The quotes
+# here are what keeps them whole.
+kept=""
 while [ $# -gt 0 ]; do
     case "$1" in
     -rpath)
@@ -234,7 +240,10 @@ while [ $# -gt 0 ]; do
         shift
         ;;
     *)
-        arguments="$arguments $1"
+        # Append to a NUL-delimited list, which survives any character a path
+        # can contain. `set --` then rebuilds "$@" from it before exec.
+        kept="$kept$1
+"
         shift
         ;;
     esac
@@ -244,6 +253,14 @@ done
 # The rest of the standard library and its C++ dependencies have to be added
 # here, the same way the Makefile rules add them.
 SWIFTLIB="$DEVKITPRO/swift/toolchain/usr/lib/swift/none/aarch64"
+
+# FoundationEssentials is optional: the archive only exists after
+# build-foundation.sh has run. An archive member is pulled only when something
+# references it, so adding it when it exists costs nothing.
+foundation=""
+if [ -f "$SWIFTLIB/libswiftFoundationEssentials.a" ]; then
+    foundation="-lswiftFoundationEssentials"
+fi
 
 # OunceHEN is not in every SDK release, and only a program that uses it needs
 # it. An archive member is pulled only when something references it, so adding
@@ -260,18 +277,35 @@ if [ -n "${SWITCH2_LD_MAP:-}" ]; then
     map="-Wl,-Map,$SWITCH2_LD_MAP"
 fi
 
+# Split the accumulated list back into positional parameters. The IFS is set
+# to a newline only, so a space in a path is ordinary and a newline ends an
+# argument; paths with newlines in them are not a case worth supporting.
+old_ifs="$IFS"
+IFS='
+'
+# shellcheck disable=SC2086
+set -- $kept
+IFS="$old_ifs"
+
+# -lnx comes before the Swift libraries so that libnx's thread-locals are
+# laid out first, the same order the Makefile rules produce. swift_shim.o
+# clears Swift's thread-locals from the fixed SWIFT_TLS_START; if the Swift
+# libraries came first, Swift's variables would sit below libnx's and that
+# offset would be wrong.
+#
 # shellcheck disable=SC2086
 exec "$DEVKITPRO/devkitA64/bin/aarch64-none-elf-gcc" $ALLOCATOR_OBJECTS \
-    $arguments $map \
+    "$@" $map \
     "$DEVKITPRO/swift/swiftpm/swift_shim.o" \
+    -L"$DEVKITPRO/libounce/lib" -L"$DEVKITPRO/portlibs/switch2/lib" \
+    -lnx $ouncehen \
     -L"$SWIFTLIB" \
     -Wl,--start-group \
     -lswift_Concurrency_swift -lswift_Concurrency \
     -lswiftRuntime -lswiftDemangle -lswiftLLVMSupport \
-    -lswiftStdlibStubs -lswiftThreading \
+    -lswiftStdlibStubs -lswiftThreading $foundation \
     -Wl,--end-group \
-    -L"$DEVKITPRO/libounce/lib" -L"$DEVKITPRO/portlibs/switch2/lib" \
-    -lnx $ouncehen -lstdc++ -lm
+    -lstdc++ -lm
 LINKER_EOF
 
 # The path can contain slashes and ampersands, so it is substituted with a
@@ -339,6 +373,20 @@ EOF
 # The tools. The Swift compiler targets the bare-metal triple, the C compiler
 # is clang because libdispatch and blocks need it, and the link goes through
 # devkitA64's gcc so that switch.specs and libsysbase are picked up.
+#
+# FoundationEssentials installs its Clang modules outside the sysroot. When the
+# build is present, name the include paths and module maps in the toolset so
+# every package that imports FoundationEssentials can find them; when it is
+# absent, the flags are omitted and the SDK behaves as before.
+foundation_flags=""
+if [ -f "$SWIFT_HOME/foundation/include/GlibcC/module.modulemap" ]; then
+    foundation_flags=",
+      \"-Xcc\", \"-I$SWIFT_HOME/foundation/include/GlibcC\",
+      \"-Xcc\", \"-fmodule-map-file=$SWIFT_HOME/foundation/include/GlibcC/module.modulemap\",
+      \"-Xcc\", \"-I$SWIFT_HOME/foundation/include/FoundationCShims\",
+      \"-Xcc\", \"-fmodule-map-file=$SWIFT_HOME/foundation/include/FoundationCShims/module.modulemap\""
+fi
+
 cat >"$bundle/switch2/toolset.json" <<EOF
 {
   "schemaVersion": "1.0",
@@ -347,8 +395,14 @@ cat >"$bundle/switch2/toolset.json" <<EOF
     "extraCLIOptions": [
       "-target", "aarch64-none-none-elf",
       "-Xcc", "--sysroot=$SYSROOT",
+      "-Xcc", "-D__SWITCH__",
+      "-Xcc", "-D__SWITCH2__",
+      "-Xcc", "-D__STDC_HOSTED__=0",
+      "-Xcc", "-D__block=",
+      "-Xcc", "-Wno-builtin-macro-redefined",
+      "-Xcc", "-Wno-macro-redefined",
       "-Xcc", "-I$LIBNX/include",
-      "-Xcc", "-I$PORTLIBS2/include"
+      "-Xcc", "-I$PORTLIBS2/include"$foundation_flags
     ]
   },
   "cCompiler": {
@@ -356,6 +410,12 @@ cat >"$bundle/switch2/toolset.json" <<EOF
     "extraCLIOptions": [
       "-target", "aarch64-none-elf",
       "--sysroot", "$SYSROOT",
+      "-D__SWITCH__",
+      "-D__SWITCH2__",
+      "-D__STDC_HOSTED__=0",
+      "-D__block=",
+      "-Wno-builtin-macro-redefined",
+      "-Wno-macro-redefined",
       "-I$LIBNX/include",
       "-I$PORTLIBS2/include"
     ]

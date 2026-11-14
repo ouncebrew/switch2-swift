@@ -1,0 +1,12 @@
+/* The C half of the Glibc shim.
+ *
+ * Named GlibcC rather than Glibc because the module Foundation imports is a
+ * Swift module (see ../GlibcOverlay): it re-exports this one and adds the
+ * POSIXErrorCode type, which is a Swift overlay in the real toolchain and not
+ * a C type. A C module cannot re-export a Swift one, so the Swift module has
+ * to own the name.
+ */
+module GlibcC [system] {
+    header "Glibc.h"
+    export *
+}

@@ -11,6 +11,8 @@
 #   sh install.sh
 #   sh $DEVKITPRO/swift/install-swift.sh        # downloads Swift from swift.org
 #   sh $DEVKITPRO/swift/full/build-stdlib.sh    # builds the full stdlib
+#   sh $DEVKITPRO/swift/foundation/fetch-foundation.sh
+#   sh $DEVKITPRO/swift/foundation/build-foundation.sh
 #   sh $DEVKITPRO/swift/dispatch/build-dispatch.sh
 #   sh $DEVKITPRO/swift/swiftpm/install-swift-sdk.sh
 #
@@ -85,6 +87,15 @@ rm -rf "$SWIFT_HOME/dispatch/config" "$SWIFT_HOME/dispatch/shim"
 cp -R "$SCRIPT_DIR/swift/dispatch/config" \
     "$SCRIPT_DIR/swift/dispatch/shim" "$SWIFT_HOME/dispatch/"
 
+# FoundationEssentials. The upstream checkout is fetched and patched at build
+# time; only the shim and the build scripts are installed here.
+mkdir -p "$SWIFT_HOME/foundation"
+cp "$SCRIPT_DIR/swift/foundation/build-foundation.sh" \
+    "$SCRIPT_DIR/swift/foundation/fetch-foundation.sh" \
+    "$SCRIPT_DIR/swift/foundation/patch-package-swift.py" "$SWIFT_HOME/foundation/"
+rm -rf "$SWIFT_HOME/foundation/shim"
+cp -R "$SCRIPT_DIR/swift/foundation/shim" "$SWIFT_HOME/foundation/"
+
 cp "$SCRIPT_DIR/swift/swiftpm/install-swift-sdk.sh" \
     "$SCRIPT_DIR/swift/swiftpm/switch2-build.sh" "$SWIFT_HOME/swiftpm/"
 
@@ -110,6 +121,8 @@ The Swift toolchain support is installed in $SWIFT_HOME.
 Install what is missing, once:
   sh $SWIFT_HOME/install-swift.sh
   sh $SWIFT_HOME/full/build-stdlib.sh
+  sh $SWIFT_HOME/foundation/fetch-foundation.sh
+  sh $SWIFT_HOME/foundation/build-foundation.sh
   sh $SWIFT_HOME/dispatch/build-dispatch.sh
   sh $SWIFT_HOME/swiftpm/install-swift-sdk.sh
 

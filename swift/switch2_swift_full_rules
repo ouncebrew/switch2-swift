@@ -11,6 +11,8 @@
 # - A %.o: %.swift rule.
 # - SWIFT_SHIM_OBJ, the object with the C runtime shims that newlib lacks.
 # - SWIFT_FULL_LIBS, the Swift libraries and their C++ dependencies.
+# - The FoundationEssentials module maps and SWIFT_FOUNDATION_LIBS, when
+#   build-foundation.sh has installed them.
 #
 # A Makefile that uses Swift adds the Swift objects to OFILES_SRC,
 # SWIFT_SHIM_OBJ to OFILES and SWIFT_FULL_LIBS to LIBS. See
@@ -35,6 +37,22 @@ SWIFT_TARGET	:=	aarch64-none-none-elf
 SWIFT_TARGET_ARCH	:=	aarch64
 
 SWIFTFLAGS	:=	-target $(SWIFT_TARGET) -parse-as-library -O -g
+
+# FoundationEssentials, when its build has installed it. The C modules it
+# exports need newlib's headers through the sysroot, and their module maps
+# have to be named explicitly because they are not in a framework path. Both
+# live under foundation/include; without the build the wildcard is empty and
+# a program that does not use Foundation is unaffected.
+SWIFT_FOUNDATION_INCLUDE	:=	$(SWIFT_HOME)/foundation/include
+ifneq ($(wildcard $(SWIFT_FOUNDATION_INCLUDE)/GlibcC/module.modulemap),)
+SWIFTFLAGS	+=	-Xcc -D__SWITCH__ \
+			-Xcc --sysroot=$(DEVKITPRO)/devkitA64/aarch64-none-elf \
+			-Xcc -I$(SWIFT_FOUNDATION_INCLUDE)/GlibcC \
+			-Xcc -fmodule-map-file=$(SWIFT_FOUNDATION_INCLUDE)/GlibcC/module.modulemap \
+			-Xcc -I$(SWIFT_FOUNDATION_INCLUDE)/FoundationCShims \
+			-Xcc -fmodule-map-file=$(SWIFT_FOUNDATION_INCLUDE)/FoundationCShims/module.modulemap
+SWIFT_FOUNDATION_LIBS	:=	-lswiftFoundationEssentials
+endif
 
 SWIFT_SHIM_OBJ	:=	swift_shim.o
 

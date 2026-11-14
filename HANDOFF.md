@@ -14,11 +14,13 @@ Install that first; `install.sh` here checks for it.
 | Swift concurrency | part of the full library | works, single-threaded |
 | libdispatch | `swift/switch2_dispatch_rules` | works |
 | SwiftPM | `swift/swiftpm/` | works, release mode only |
+| FoundationEssentials | `swift/foundation/` | works, no ICU or networking |
 | `Ounce` wrapper | `swift/libounce/` | works |
 | Porting tools | `scripts/` | works |
 
-Not ported: Foundation, backtracing, dispatch sources that watch file
-descriptors, dispatch I/O.
+Not ported: `FoundationInternationalization` (ICU), `FoundationNetworking`,
+`FoundationXML`, backtracing, dispatch sources that watch file descriptors,
+dispatch I/O.
 
 ## Setup
 
@@ -42,6 +44,8 @@ Then, once, from this repository:
 sh install.sh
 sh $DEVKITPRO/swift/install-swift.sh
 sh $DEVKITPRO/swift/full/build-stdlib.sh
+sh $DEVKITPRO/swift/foundation/fetch-foundation.sh
+sh $DEVKITPRO/swift/foundation/build-foundation.sh
 sh $DEVKITPRO/swift/dispatch/build-dispatch.sh
 sh $DEVKITPRO/swift/swiftpm/install-swift-sdk.sh
 ```
@@ -61,6 +65,13 @@ include $(DEVKITPRO)/swift/switch2_swift_full_rules   # or switch2_swift_rules
 LIBS := -lnx $(SWIFT_FULL_LIBS)
 ```
 
+For FoundationEssentials, link its library too; the full rules add the shim
+module maps once `build-foundation.sh` has installed them:
+
+```make
+LIBS := -lnx $(SWIFT_FOUNDATION_LIBS) $(SWIFT_FULL_LIBS)
+```
+
 For libdispatch:
 
 ```make
@@ -70,7 +81,29 @@ LIBS := -lnx $(DISPATCH_LIBS)
 ```
 
 `examples/` has one program for each: `swift-hello`, `swift-full`,
-`swift-async`, `dispatch-hello`, plus the two C ones.
+`swift-async`, `dispatch-hello`, `foundation-hello`, plus the two C ones.
+
+### FoundationEssentials
+
+`swift/foundation/` builds FoundationEssentials from upstream
+swift-foundation, with the same rule as the standard library: the checkout is
+unmodified and `build-foundation.sh` patches it at build time behind
+`__SWITCH__`. The build installs the archive, the Swift modules and two C shim
+module maps; `switch2_swift_full_rules` adds them when present, and
+`install-swift-sdk.sh` puts them in the SwiftPM toolset.
+
+The limits are deliberate:
+
+- No `FoundationInternationalization` (ICU), `FoundationNetworking` or
+  `FoundationXML`. Import `FoundationEssentials`, not `Foundation`.
+- No `_StringProcessing`: regex options compile but fall back to literal
+  matching.
+- Time zone data is read from `sdmc:/switch/zoneinfo`.
+- xattrs and `chown` return `ENOTSUP`; there are no user or group accounts.
+- `ProcessInfo.arguments` is empty.
+
+The example `examples/foundation-hello` builds and links; it has not been run
+on hardware.
 
 ### SwiftPM
 

@@ -263,6 +263,30 @@ The package needs the SDK's toolset to put the libounce and OunceHEN include
 paths on the compiler's search path. `install-swift-sdk.sh` does that; a bundle
 installed before the library existed has to be rebuilt with `--force`.
 
+### Using FoundationEssentials
+
+Once `build-foundation.sh` has installed the library, import it directly; no
+`Package.swift` change is needed:
+
+```swift
+import FoundationEssentials
+
+let now = Date()
+let data = Data("switch".utf8)
+```
+
+`Data`, `Date`, `URL`, `JSONEncoder`/`JSONDecoder`, `Codable`, `FileManager`
+and `ProcessInfo` work. Import `FoundationEssentials`, not `Foundation`: the
+umbrella module needs Internationalization, Networking and XML, which are not
+ported. There are no regular expressions (the toolchain has no
+`_StringProcessing`), time zone data is read from `sdmc:/switch/zoneinfo`, and
+xattrs and `chown` report `ENOTSUP`.
+
+`install-swift-sdk.sh` adds the shim module maps to the generated toolset and
+the linker wrapper adds `libswiftFoundationEssentials.a` when it exists. A
+bundle generated before the Foundation build existed has to be rebuilt with
+`--force`.
+
 ---
 
 ## 5. Building
@@ -382,8 +406,6 @@ you need it, the Makefile rules are the supported path — see
 - **Debug builds.** `-c debug` links `SwiftOnoneSupport`, which this port does
   not build. The toolchain only ships the host's copy. Always use
   `-c release`.
-- **Foundation.** Not ported. No `Date`, `Data`, `URL`, `JSONEncoder`, and so
-  on.
 - **Backtracing.** Not ported.
 - **Dispatch sources that watch file descriptors**, and **dispatch I/O.** The
   console has no descriptor table. Queues, timers and the manager thread do
