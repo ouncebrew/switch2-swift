@@ -91,7 +91,10 @@ Install devkitPro pacman first. The instructions are at
   https://devkitpro.org/wiki/devkitPro_pacman
 Then run this script again. It installs switch-dev and switch-zlib.
 
-You can also use the Docker image instead. See README.md.
+On macOS there is no system pacman: install devkitpro-pacman-installer.pkg
+from https://github.com/devkitPro/pacman/releases first. It installs native
+Apple silicon and Intel binaries, so no container is needed, and this script
+uses the dkp-pacman it puts in /usr/local/bin.
 EOF
     exit 1
 fi

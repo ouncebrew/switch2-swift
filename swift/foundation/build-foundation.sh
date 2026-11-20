@@ -11,16 +11,25 @@
 #
 # What this builds, and what it does not
 # --------------------------------------
-# Foundation is three libraries. This script builds the first:
+# Foundation is three libraries. This script builds the first and a focused
+# part of the third:
 #
 #   FoundationEssentials            data, dates, URLs, JSON, codable
 #   FoundationInternationalization  calendars, locales, formatting (ICU)
 #   FoundationNetworking/XML        URLSession, XMLParser (libcurl, libxml2)
 #
-# Internationalization needs ICU, which is a much larger port; networking needs
-# libcurl and a TCP stack. Neither is attempted here. A program that imports
-# `Foundation` rather than `FoundationEssentials` will not link, which is the
-# honest outcome rather than a stub that silently does nothing.
+# Internationalization needs ICU, which is a much larger port, and XML needs
+# libxml2. Neither is attempted here.
+#
+# FoundationNetworking is different. Upstream's module is part of
+# swift-corelibs-foundation and is built on CoreFoundation and libcurl, which
+# this port does not have. The console does have what matters underneath,
+# though -- libnx's BSD socket service and its ssl service -- so this script
+# builds a small FoundationNetworking of its own on top of those. It covers
+# HTTP and HTTPS data requests with URLSession, URLRequest and URLResponse; it
+# is not a port of upstream's module, and HANDOFF.md lists what it does not
+# do. A program that imports `Foundation` rather than the two modules will not
+# link, because Internationalization is still missing.
 #
 # Relationship to the rest of the port
 # ------------------------------------
@@ -62,6 +71,11 @@ DEVKITA64="$DEVKITPRO/devkitA64"
 SHIM="$SCRIPT_DIR/shim"
 SWIFT="$TOOLCHAIN/usr/bin/swift"
 SWIFTLIB="$TOOLCHAIN/usr/lib/swift/none/aarch64"
+LIBNX="$DEVKITPRO/libounce"
+# The networking sources and the C transport that goes with them. They are
+# built after FoundationEssentials, because the Swift module imports it.
+NETWORKING="$SCRIPT_DIR/networking"
+CLANG="$TOOLCHAIN/usr/bin/clang"
 
 if [ -n "${1:-}" ]; then
     SRC="$1"
@@ -84,11 +98,15 @@ die() {
 Run fetch-foundation.sh first, or pass the path to a checkout."
 [ -f "$SRC/Package.swift" ] || die "$SRC does not look like the Swift Foundation package."
 [ -x "$SWIFT" ] || die "no Swift toolchain in $TOOLCHAIN. Run install-swift.sh first."
+[ -x "$CLANG" ] || die "no clang in $TOOLCHAIN. Run install-swift.sh first."
 [ -f "$SWIFTLIB/libswiftCore.a" ] ||
     die "the full standard library is not built. Run ../full/build-stdlib.sh first."
 
 "$SWIFT" sdk list 2>/dev/null | grep -qx switch2 ||
     die "the Switch 2 Swift SDK is not installed. Run ../swiftpm/install-swift-sdk.sh."
+
+[ -d "$NETWORKING/Sources/FoundationNetworking" ] ||
+    die "the FoundationNetworking sources are missing from $NETWORKING. Re-run install.sh."
 
 # --------------------------------------------------------------------------
 # The patches
@@ -836,26 +854,101 @@ install_foundation() {
     cp -r "$SHIM/Sources/GlibcC/include" "$include/GlibcC"
 }
 
+build_networking() {
+    echo "Building FoundationNetworking"
+
+    build="$NETWORKING/build"
+    rm -rf "$build"
+    mkdir -p "$build"
+
+    # The transport. It is C because every call it makes is a libnx C call:
+    # socketInitializeDefault, getaddrinfo, connect, poll, recv, send and the
+    # ssl service. clang, not gcc, so that it agrees with the Swift side on
+    # -mtp=tpidrro_el0 and on the target triple.
+    "$CLANG" -target aarch64-none-elf --sysroot="$DEVKITA64/aarch64-none-elf" \
+        -std=gnu11 -O2 -g -fPIC \
+        -mtp=tpidrro_el0 \
+        -D__SWITCH__ -D__SWITCH2__ \
+        -I"$LIBNX/include" \
+        -c "$NETWORKING/transport.c" -o "$build/transport.o" ||
+        die "failed to compile the FoundationNetworking transport"
+
+    # The Swift module. It imports the installed FoundationEssentials module,
+    # so this runs after install_foundation. The Clang module maps are the
+    # ones FoundationEssentials itself was built against; importing it loads
+    # them, and the compiler needs to find them again here.
+    "$TOOLCHAIN/usr/bin/swiftc" \
+        -target aarch64-none-none-elf \
+        -parse-as-library -O -g -wmo -swift-version 5 \
+        -module-name FoundationNetworking \
+        -D__SWITCH__ \
+        -I "$SWIFTLIB" \
+        -Xcc --sysroot="$DEVKITA64/aarch64-none-elf" \
+        -Xcc -D__SWITCH__ \
+        -Xcc -D__SWITCH2__ \
+        -Xcc -D__STDC_HOSTED__=0 \
+        -Xcc -I"$LIBNX/include" \
+        -Xcc -I"$SWIFT_HOME/foundation/include/GlibcC" \
+        -Xcc -fmodule-map-file="$SWIFT_HOME/foundation/include/GlibcC/module.modulemap" \
+        -Xcc -I"$SWIFT_HOME/foundation/include/FoundationCShims" \
+        -Xcc -fmodule-map-file="$SWIFT_HOME/foundation/include/FoundationCShims/module.modulemap" \
+        -emit-module -emit-module-path "$build/FoundationNetworking.swiftmodule" \
+        -emit-object -o "$build/FoundationNetworking.o" \
+        "$NETWORKING"/Sources/FoundationNetworking/*.swift ||
+        die "failed to compile FoundationNetworking"
+
+    # One object and the transport, archived by devkitA64's own ar rather than
+    # by the Swift driver. The driver's static-library path uses libtool on a
+    # macOS host and ar on Linux; naming the two members explicitly keeps the
+    # archive the same on both. A program links the module once with
+    # -lswiftFoundationNetworking, and the object that references sfn_* pulls
+    # the transport in.
+    "$DEVKITA64/bin/aarch64-none-elf-ar" rcs \
+        "$build/libswiftFoundationNetworking.a" \
+        "$build/FoundationNetworking.o" "$build/transport.o" ||
+        die "failed to archive FoundationNetworking"
+}
+
+install_networking() {
+    echo "Installing FoundationNetworking into $SWIFTLIB"
+
+    build="$NETWORKING/build"
+    [ -f "$build/libswiftFoundationNetworking.a" ] ||
+        die "no FoundationNetworking archive in $build"
+    [ -f "$build/FoundationNetworking.swiftmodule" ] ||
+        die "no FoundationNetworking module in $build"
+
+    cp "$build/libswiftFoundationNetworking.a" "$SWIFTLIB/"
+    cp "$build/FoundationNetworking.swiftmodule" "$SWIFTLIB/"
+}
+
 patch_sources
 build_shim
 build_foundation
 install_foundation
+build_networking
+install_networking
 
 cat <<EOF
 
-FoundationEssentials is installed in $SWIFTLIB.
+FoundationEssentials and FoundationNetworking are installed in $SWIFTLIB.
 
-To build a program that uses it, add it to LIBS the same way the standard
+To build a program that uses them, add them to LIBS the same way the standard
 library is added:
 
-  LIBS := -lnx -lswiftFoundationEssentials \$(SWIFT_FULL_LIBS)
+  LIBS := -lnx -lswiftFoundationEssentials -lswiftFoundationNetworking \\
+          \$(SWIFT_FULL_LIBS)
 
-and import FoundationEssentials, not Foundation: this port does not include
-FoundationInternationalization or FoundationNetworking, so the umbrella module
-does not link. See examples/foundation-hello.
+and import FoundationEssentials and FoundationNetworking, not Foundation:
+FoundationInternationalization is still missing, so the umbrella module does
+not link. See examples/foundation-hello and examples/foundation-network.
+
+FoundationNetworking supports http:// and https:// data requests. HTTPS uses
+the console's ssl service, so certificate and host-name verification work
+without a CA bundle. It does not implement caches, cookies, proxies,
+authentication challenges, compression or HTTP/2; see HANDOFF.md.
 
 Not built here, and why:
   FoundationInternationalization  needs ICU
-  FoundationNetworking            needs libcurl and a TCP stack
   FoundationXML                   needs libxml2
 EOF

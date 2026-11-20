@@ -13,6 +13,7 @@
 # - SWIFT_FULL_LIBS, the Swift libraries and their C++ dependencies.
 # - The FoundationEssentials module maps and SWIFT_FOUNDATION_LIBS, when
 #   build-foundation.sh has installed them.
+# - SWIFT_NETWORKING_LIBS, when the FoundationNetworking archive is installed.
 #
 # A Makefile that uses Swift adds the Swift objects to OFILES_SRC,
 # SWIFT_SHIM_OBJ to OFILES and SWIFT_FULL_LIBS to LIBS. See
@@ -52,6 +53,16 @@ SWIFTFLAGS	+=	-Xcc -D__SWITCH__ \
 			-Xcc -I$(SWIFT_FOUNDATION_INCLUDE)/FoundationCShims \
 			-Xcc -fmodule-map-file=$(SWIFT_FOUNDATION_INCLUDE)/FoundationCShims/module.modulemap
 SWIFT_FOUNDATION_LIBS	:=	-lswiftFoundationEssentials
+endif
+
+# FoundationNetworking, when its build has installed it. It has no Clang
+# modules of its own: the Swift module and the archive are enough, and the
+# archive carries the libnx socket/TLS transport with it.
+SWIFT_NETWORKING_LIBS	:=
+ifneq ($(wildcard $(SWIFT_HOME)/toolchain/usr/lib/swift/none/$(SWIFT_TARGET_ARCH)/libswiftFoundationEssentials.a),)
+ifneq ($(wildcard $(SWIFT_HOME)/toolchain/usr/lib/swift/none/$(SWIFT_TARGET_ARCH)/libswiftFoundationNetworking.a),)
+SWIFT_NETWORKING_LIBS	:=	-lswiftFoundationNetworking
+endif
 endif
 
 SWIFT_SHIM_OBJ	:=	swift_shim.o

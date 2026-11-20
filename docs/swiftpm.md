@@ -47,6 +47,11 @@ On NixOS, `nix develop` gives you an FHS environment with devkitPro already
 populated. SwiftPM compiles the package manifest for the *host*, and that link
 needs a conventional glibc layout, so the FHS environment is required there.
 
+On macOS there is no FHS environment to enter. devkitPro's pacman `.pkg`
+installs native devkitA64 tools, `install-swift.sh` installs the macOS Swift
+toolchain, and the generated bundle lists the Apple host triples alongside the
+Linux ones.
+
 ---
 
 ## 3. Installing the Swift SDK
@@ -263,29 +268,36 @@ The package needs the SDK's toolset to put the libounce and OunceHEN include
 paths on the compiler's search path. `install-swift-sdk.sh` does that; a bundle
 installed before the library existed has to be rebuilt with `--force`.
 
-### Using FoundationEssentials
+### Using FoundationEssentials and FoundationNetworking
 
-Once `build-foundation.sh` has installed the library, import it directly; no
-`Package.swift` change is needed:
+Once `build-foundation.sh` has installed the libraries, import them directly;
+no `Package.swift` change is needed:
 
 ```swift
 import FoundationEssentials
+import FoundationNetworking
 
 let now = Date()
 let data = Data("switch".utf8)
+
+let (body, response) = try await URLSession.shared.data(
+    from: URL(string: "https://example.com/")!)
 ```
 
 `Data`, `Date`, `URL`, `JSONEncoder`/`JSONDecoder`, `Codable`, `FileManager`
-and `ProcessInfo` work. Import `FoundationEssentials`, not `Foundation`: the
-umbrella module needs Internationalization, Networking and XML, which are not
-ported. There are no regular expressions (the toolchain has no
-`_StringProcessing`), time zone data is read from `sdmc:/switch/zoneinfo`, and
-xattrs and `chown` report `ENOTSUP`.
+and `ProcessInfo` work. `URLSession`, `URLRequest`, `URLResponse`,
+`HTTPURLResponse` and `URLError` do too, over libnx's socket service and the
+console's ssl service. Import these two modules, not `Foundation`: the umbrella
+module also needs Internationalization and XML, which are not ported. Requests
+execute synchronously; caches, cookies, proxies, authentication challenges,
+compression and HTTP/2 are not implemented. There are no regular expressions
+(the toolchain has no `_StringProcessing`), time zone data is read from
+`sdmc:/switch/zoneinfo`, and xattrs and `chown` report `ENOTSUP`.
 
 `install-swift-sdk.sh` adds the shim module maps to the generated toolset and
-the linker wrapper adds `libswiftFoundationEssentials.a` when it exists. A
-bundle generated before the Foundation build existed has to be rebuilt with
-`--force`.
+the linker wrapper adds `libswiftFoundationEssentials.a` and
+`libswiftFoundationNetworking.a` when they exist. A bundle generated before
+the Foundation build existed has to be rebuilt with `--force`.
 
 ---
 

@@ -14,13 +14,13 @@ Install that first; `install.sh` here checks for it.
 | Swift concurrency | part of the full library | works, single-threaded |
 | libdispatch | `swift/switch2_dispatch_rules` | works |
 | SwiftPM | `swift/swiftpm/` | works, release mode only |
-| FoundationEssentials | `swift/foundation/` | works, no ICU or networking |
+| FoundationEssentials | `swift/foundation/` | works, no ICU |
+| FoundationNetworking | `swift/foundation/networking/` | works, data requests |
 | `Ounce` wrapper | `swift/libounce/` | works |
 | Porting tools | `scripts/` | works |
 
-Not ported: `FoundationInternationalization` (ICU), `FoundationNetworking`,
-`FoundationXML`, backtracing, dispatch sources that watch file descriptors,
-dispatch I/O.
+Not ported: `FoundationInternationalization` (ICU), `FoundationXML`,
+backtracing, dispatch sources that watch file descriptors, dispatch I/O.
 
 ## Setup
 
@@ -50,9 +50,15 @@ sh $DEVKITPRO/swift/dispatch/build-dispatch.sh
 sh $DEVKITPRO/swift/swiftpm/install-swift-sdk.sh
 ```
 
-The second line is a 784 MB download from swift.org. On any other Linux,
-install devkitPro pacman first and skip the FHS environment; the rest is the
-same.
+The second line is a 784 MB download from swift.org, or 1.4 GB on macOS, where
+the toolchain is extracted from swift.org's installer package instead.
+On any other Linux, install devkitPro pacman first and skip the FHS
+environment; the rest is the same.
+
+macOS needs no FHS environment at all: devkitPro pacman's `.pkg` installs
+native devkitA64 binaries, and the extracted Swift toolchain lands in the same
+`$DEVKITPRO/swift/toolchain` layout, so the commands above and every script
+below are unchanged.
 
 ## Building
 
@@ -83,7 +89,7 @@ LIBS := -lnx $(DISPATCH_LIBS)
 `examples/` has one program for each: `swift-hello`, `swift-full`,
 `swift-async`, `dispatch-hello`, `foundation-hello`, plus the two C ones.
 
-### FoundationEssentials
+### FoundationEssentials and FoundationNetworking
 
 `swift/foundation/` builds FoundationEssentials from upstream
 swift-foundation, with the same rule as the standard library: the checkout is
@@ -92,18 +98,43 @@ unmodified and `build-foundation.sh` patches it at build time behind
 module maps; `switch2_swift_full_rules` adds them when present, and
 `install-swift-sdk.sh` puts them in the SwiftPM toolset.
 
-The limits are deliberate:
+The FoundationEssentials limits are deliberate:
 
-- No `FoundationInternationalization` (ICU), `FoundationNetworking` or
-  `FoundationXML`. Import `FoundationEssentials`, not `Foundation`.
+- No `FoundationInternationalization` (ICU) or `FoundationXML`. Import
+  `FoundationEssentials`, not `Foundation`.
 - No `_StringProcessing`: regex options compile but fall back to literal
   matching.
 - Time zone data is read from `sdmc:/switch/zoneinfo`.
 - xattrs and `chown` return `ENOTSUP`; there are no user or group accounts.
 - `ProcessInfo.arguments` is empty.
 
-The example `examples/foundation-hello` builds and links; it has not been run
-on hardware.
+`swift/foundation/networking/` adds FoundationNetworking. It is not a port of
+upstream's module: upstream lives in swift-corelibs-foundation and is built on
+CoreFoundation and libcurl, neither of which this port has. The console does
+have the two pieces that matter underneath, so the module uses those directly
+and implements the data-request surface itself:
+
+- TCP is libnx's BSD socket service: `socketInitializeDefault`, `getaddrinfo`,
+  `poll`, `send` and `recv`. The module initializes the service on the first
+  request; a program does not have to call `socketInitialize` itself. The ssl
+  service is initialized on the first HTTPS request.
+- HTTPS is the console's ssl service. Verification is the service's, against
+  the console certificate store: peer certificate and host name. No CA bundle
+  is shipped or read from the SD card.
+- `URLSession.data(for:)`, `data(from:)` and data tasks run synchronously.
+  Resuming a task performs the request before returning and then calls the
+  completion handler. The console has one cooperative executor, and suspending
+  a task on a blocking socket would starve everything else.
+- Supported: `http` and `https`, methods, request headers and body,
+  `Content-Length` and chunked responses, redirects (ten), and a per-request
+  timeout. Not supported: caches, cookies, proxies, authentication
+  challenges, compression (requests ask for `identity`), HTTP/2, uploads,
+  download-to-file and task metrics.
+
+`examples/foundation-hello` builds and links, but has not been run on
+hardware. `examples/foundation-network` type-checks against the 6.0
+FoundationEssentials build; it has not been built for the console or run on
+hardware here.
 
 ### SwiftPM
 
@@ -124,6 +155,11 @@ devkitPro Switch toolchain through `install-devkitpro.sh`, and the Swift
 toolchain through `install-swift.sh`. `--no-deps` turns that off. libounce and
 the standard library are still reported, because the first comes from the SDK
 archive that only `install.sh` has and the second is a long build.
+
+The generated bundle lists the Linux and Apple host triples, so the same
+installation works on a Mac. The tools it names are whichever host's devkitA64
+and Swift toolchain are installed; the target is always
+`aarch64-none-none-elf`.
 
 Release mode only: debug links `SwiftOnoneSupport`, which is not built. The
 entry point is top-level code, not `@_cdecl("main")`, because SwiftPM generates

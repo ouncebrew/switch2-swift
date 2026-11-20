@@ -36,6 +36,24 @@ SWIFT_TAG="swift-${SWIFT_VERSION}-RELEASE"
 TARGET=aarch64-none-none-elf
 TARGET_ARCH=aarch64
 
+# The host triple that LLVM records. It is informational here -- every object
+# is compiled for the target, and none of the host's object format is used --
+# but a toolchain built on macOS should not claim it was built on Linux.
+host_triple() {
+    case "$(uname -s)" in
+    Darwin) host_os=apple-darwin ;;
+    Linux) host_os=unknown-linux-gnu ;;
+    *) host_os="unknown-$(uname -s | tr '[:upper:]' '[:lower:]')" ;;
+    esac
+    case "$(uname -m)" in
+    arm64 | aarch64) host_arch=aarch64 ;;
+    x86_64 | amd64) host_arch=x86_64 ;;
+    *) host_arch="$(uname -m)" ;;
+    esac
+    echo "$host_arch-$host_os"
+}
+HOST_TRIPLE="$(host_triple)"
+
 usage() {
     echo "usage: sh build-stdlib.sh [--jobs N] [stubs|concurrency|libs]" >&2
     echo "  stubs        rebuild only libswiftStdlibStubs.a, which holds the Unicode tables" >&2
@@ -151,13 +169,13 @@ write_generated_headers() {
 #endif
 EOF
 
-    cat >"$BUILD/gen/llvm/Config/llvm-config.h" <<'EOF'
+    cat >"$BUILD/gen/llvm/Config/llvm-config.h" <<EOF
 #ifndef LLVM_CONFIG_H
 #define LLVM_CONFIG_H
 #define LLVM_DEFAULT_TARGET_TRIPLE "aarch64-none-elf"
 #define LLVM_ENABLE_THREADS 0
 #define LLVM_HAS_ATOMICS 1
-#define LLVM_HOST_TRIPLE "x86_64-unknown-linux-gnu"
+#define LLVM_HOST_TRIPLE "$HOST_TRIPLE"
 #define LLVM_ON_UNIX 1
 #define LLVM_USE_INTEL_JITEVENTS 0
 #define LLVM_USE_OPROFILE 0

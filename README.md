@@ -10,6 +10,8 @@ A Swift toolchain for Switch 2 homebrew, on top of the
   against devkitA64's newlib: `String`, arrays, reflection, Unicode.
 - **FoundationEssentials**, the ICU-free part of Foundation: `Data`, `Date`,
   `URL`, JSON, `Codable`, `FileManager` and `ProcessInfo`.
+- **FoundationNetworking**, a small HTTP/HTTPS client over libnx's socket and
+  ssl services: `URLSession`, `URLRequest`, `URLResponse` and data requests.
 - **Swift concurrency** — `async`/`await`, actors, task groups — single
   threaded, on the console's cooperatively scheduled global executor.
 - **libdispatch**, built on shims for the pieces the console lacks: futex,
@@ -18,9 +20,8 @@ A Swift toolchain for Switch 2 homebrew, on top of the
 - **`Ounce`**, a Swift wrapper over libounce and OunceHEN: console, applet
   lifecycle, controller input, filesystem mounts and HEN sessions.
 
-Not ported: `FoundationInternationalization` (ICU), `FoundationNetworking`,
-`FoundationXML`, backtracing, dispatch sources that watch file descriptors,
-dispatch I/O.
+Not ported: `FoundationInternationalization` (ICU), `FoundationXML`,
+backtracing, dispatch sources that watch file descriptors, dispatch I/O.
 
 This repository is the Swift half of the Switch 2 SDK. The console SDK itself —
 libounce, OunceVK, OunceHEN — ships separately; `install.sh` checks for it and
@@ -41,13 +42,22 @@ sh $DEVKITPRO/swift/dispatch/build-dispatch.sh
 sh $DEVKITPRO/swift/swiftpm/install-swift-sdk.sh
 ```
 
-The second line downloads a 784 MB Swift 6.0.3 toolchain from swift.org. The
-third builds the standard library from source, which takes about 4 GiB of disk
-and 20 minutes on 8 cores. libdispatch takes a few minutes. None of them need
-to be run again unless the Swift toolchain or the console SDK changes.
+The second line downloads the Swift 6.0.3 toolchain from swift.org: 784 MB on
+Linux and 1.4 GB on macOS, where it is extracted from swift.org's installer
+package. The third builds the standard library from source, which takes about
+4 GiB of disk and 20 minutes on 8 cores. libdispatch takes a few minutes. None
+of them need to be run again unless the Swift toolchain or the console SDK
+changes.
 
 On NixOS, both prebuilt toolchains need an FHS environment. The console SDK's
 `flake.nix` provides one; run these inside it, not on the bare system.
+
+macOS needs no FHS environment. devkitPro publishes native Apple silicon and
+Intel builds of devkitA64, installed with devkitPro pacman's `.pkg` installer,
+and `install-swift.sh` unpacks the macOS toolchain into the same `toolchain`
+directory the Linux tarball fills. Everything after that is identical, and
+`install-swift-sdk.sh` lists both Apple host triples so SwiftPM accepts the
+bundle on a Mac.
 
 ## Build a program
 
@@ -89,8 +99,9 @@ LIBS	:=	-lnx $(DISPATCH_LIBS)                # libdispatch
 ```
 
 `examples/` has one program for each: `swift-hello` (embedded), `swift-full`
-(full library), `swift-async` (concurrency), `dispatch-hello` (libdispatch) and
-`foundation-hello` (FoundationEssentials).
+(full library), `swift-async` (concurrency), `dispatch-hello` (libdispatch),
+`foundation-hello` (FoundationEssentials) and `foundation-network`
+(FoundationNetworking).
 
 ## FoundationEssentials
 
@@ -105,13 +116,23 @@ sh $DEVKITPRO/swift/foundation/fetch-foundation.sh
 sh $DEVKITPRO/swift/foundation/build-foundation.sh
 ```
 
-Import `FoundationEssentials`, not `Foundation`: the umbrella module pulls in
-Internationalization, Networking and XML, which this port does not include. The
-full-library rules add the shim module maps and `SWIFT_FOUNDATION_LIBS` once the
-build has installed them, so a Makefile only needs
-`LIBS := -lnx $(SWIFT_FOUNDATION_LIBS) $(SWIFT_FULL_LIBS)`. SwiftPM packages
-get the same flags from the generated SDK bundle, so `import
-FoundationEssentials` is enough there.
+Import `FoundationEssentials` and `FoundationNetworking`, not `Foundation`:
+the umbrella module also pulls in Internationalization and XML, which this
+port does not include. The full-library rules add the shim module maps and
+`SWIFT_FOUNDATION_LIBS`, plus `SWIFT_NETWORKING_LIBS` when the networking build
+is installed, so a Makefile only needs
+`LIBS := -lnx $(SWIFT_FOUNDATION_LIBS) $(SWIFT_NETWORKING_LIBS) $(SWIFT_FULL_LIBS)`.
+SwiftPM packages get the same flags from the generated SDK bundle, so the two
+imports are enough there.
+
+`swift/foundation/networking/` is not upstream's FoundationNetworking. Upstream
+depends on CoreFoundation and libcurl, which this port does not have; this
+module implements the data-request surface directly on libnx. TCP uses the BSD
+socket service and HTTPS uses the console's ssl service, so certificates and
+host names are verified against the console store without a CA bundle. It does
+not implement caches, cookies, proxies, authentication challenges, compression
+or HTTP/2, and requests run synchronously rather than suspending a task. See
+`examples/foundation-network` for a GET.
 
 Not in this port: regular expressions (the toolchain has no
 `_StringProcessing`), time zone data beyond `sdmc:/switch/zoneinfo`, extended

@@ -262,6 +262,14 @@ if [ -f "$SWIFTLIB/libswiftFoundationEssentials.a" ]; then
     foundation="-lswiftFoundationEssentials"
 fi
 
+# FoundationNetworking is optional for the same reason, and its archive also
+# carries the C transport. It imports FoundationEssentials, so both are named;
+# the start-group below resolves the order.
+networking=""
+if [ -f "$SWIFTLIB/libswiftFoundationNetworking.a" ]; then
+    networking="-lswiftFoundationNetworking"
+fi
+
 # OunceHEN is not in every SDK release, and only a program that uses it needs
 # it. An archive member is pulled only when something references it, so adding
 # it when it exists costs nothing.
@@ -303,7 +311,7 @@ exec "$DEVKITPRO/devkitA64/bin/aarch64-none-elf-gcc" $ALLOCATOR_OBJECTS \
     -Wl,--start-group \
     -lswift_Concurrency_swift -lswift_Concurrency \
     -lswiftRuntime -lswiftDemangle -lswiftLLVMSupport \
-    -lswiftStdlibStubs -lswiftThreading $foundation \
+    -lswiftStdlibStubs -lswiftThreading $foundation $networking \
     -Wl,--end-group \
     -lstdc++ -lm
 LINKER_EOF
@@ -323,7 +331,10 @@ trap 'rm -rf "$(dirname "$bundle")"' EXIT
 mkdir -p "$bundle/switch2"
 
 # The artifact manifest. supportedTriples lists the hosts the SDK runs on,
-# not the target it builds for.
+# not the target it builds for. Both Linux host architectures and both macOS
+# ones are listed, because the same bundle layout is generated on either: the
+# compiler, the linker wrapper and the tools are the host's, and only the
+# target is fixed.
 cat >"$bundle/info.json" <<EOF
 {
   "schemaVersion": "1.0",
@@ -336,7 +347,9 @@ cat >"$bundle/info.json" <<EOF
           "path": "switch2",
           "supportedTriples": [
             "x86_64-unknown-linux-gnu",
-            "aarch64-unknown-linux-gnu"
+            "aarch64-unknown-linux-gnu",
+            "arm64-apple-macosx",
+            "x86_64-apple-macosx"
           ]
         }
       ]
